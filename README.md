@@ -13,6 +13,16 @@
 [![Formatter](https://github.com/pointcept/pointcept/actions/workflows/formatter.yml/badge.svg)](https://github.com/pointcept/pointcept/actions/workflows/formatter.yml)
 
 **Pointcept** is a powerful and flexible codebase for point cloud perception research. It is also an official implementation of the following paper:
+
+# build:
+conda env create -f environment.yml --verbose
+conda activate pointcept-torch2.5.0-cu12.4
+pip install flash-attn --no-build-isolation
+pip install -e ./libs/pointops --no-build-isolation
+pip install -e ./libs/pointgroup_ops --no-build-isolation
+
+
+
 - 🚀 **Utonia: Toward One Encoder for All Point Clouds**  
 *Yujia Zhang, Xiaoyang Wu, Yunhan Yang, Xianzhe Fan, Han Li, Yuechen Zhang, Zehao Huang, Naiyan Wang, Hengshuang Zhao*  
 [ Pretrain ] [Utonia] - [ [Project](https://pointcept.github.io/Utonia/) ] [ [Bib](https://pointcept.github.io/Utonia/#citation) ] [ [HF Demo](https://huggingface.co/spaces/pointcept-bot/Utonia) ] [ [Inference](https://github.com/Pointcept/Utonia) ] [ [Weight](https://huggingface.co/Pointcept/Utonia) ] &rarr; [here](#utonia)
