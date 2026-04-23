@@ -134,9 +134,9 @@ def process_single_file(file_name, input_split_path, output_split_path, int_max,
                 
                 hag = (c_p[:, 2] - z_ref).clip(0, z_scale)
                 norm_coords = np.zeros_like(c_p)
-                norm_coords[:, 0] = (c_p[:, 0] - (x_s + 25.0)) / 25.0
-                norm_coords[:, 1] = (c_p[:, 1] - (y_s + 25.0)) / 25.0
-                norm_coords[:, 2] = (hag / (z_scale / 2.0)) - 1.0 
+                norm_coords[:, 0] = c_p[:, 0] - (x_s + 25.0)  # Centered meters
+                norm_coords[:, 1] = c_p[:, 1] - (y_s + 25.0)  # Centered meters
+                norm_coords[:, 2] = hag                       # Height in meters
                 
                 tile_folder = os.path.join(output_split_path, f"{file_name[:-4]}_{int(x_s)}_{int(y_s)}")
                 os.makedirs(tile_folder, exist_ok=True)
