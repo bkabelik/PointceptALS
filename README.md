@@ -15,11 +15,20 @@
 **Pointcept** is a powerful and flexible codebase for point cloud perception research. It is also an official implementation of the following paper:
 
 # build:
+```bash
 conda env create -f environment.yml --verbose
 conda activate pointcept-torch2.5.0-cu12.4
 pip install flash-attn --no-build-isolation
 pip install -e ./libs/pointops --no-build-isolation
 pip install -e ./libs/pointgroup_ops --no-build-isolation
+```
+
+# prepare dales:
+```bash
+python pointcept/datasets/preprocessing/dales/preprocess_dales.py --input_path "/home/fractal01/PointceptALS/data/DALESObjects" --output_path "/home/fractal01/PointceptALS/data/DALESObjects_training_data" --cores 16
+```
+
+
 
 
 
