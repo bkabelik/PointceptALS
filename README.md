@@ -28,6 +28,19 @@ pip install -e ./libs/pointgroup_ops --no-build-isolation
 python pointcept/datasets/preprocessing/dales/preprocess_dales.py --input_path "/home/fractal01/PointceptALS/data/DALESObjects" --output_path "/home/fractal01/PointceptALS/data/DALESObjects_training_data" --cores 16
 ```
 
+# view preprocessed data
+```bash
+pip install open3d
+python tools/npy_viewer.py --data_path "/home/fractal01/PointceptALS/data/DALESObjects_training_data"
+
+```
+
+# view dtm of ply file
+```bash
+python tools/check_dtm.py /home/fractal01/PointceptALS/data/DALESObjects/train/5105_54460_new.ply
+
+```
+
 
 
 # pointcept documentation

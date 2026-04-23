@@ -1,38 +1,31 @@
 import os
 import argparse
 import numpy as np
-import torch
 import json
 from plyfile import PlyData
 from tqdm import tqdm
 from scipy.interpolate import NearestNDInterpolator
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from pathlib import Path
 
 def scan_single_file(file_path):
     """Worker function for scanning global stats."""
     try:
         plydata = PlyData.read(file_path)
         data = plydata.elements[0].data
-        
-        # Sample intensity (every 100th point)
         intensity_sample = np.array(data['intensity'][::100])
-        
-        # Local HAG estimate
-        z_min = np.min(data['z'])
-        z_max = np.max(data['z'])
+        z_min, z_max = np.min(data['z']), np.max(data['z'])
         return intensity_sample, (z_max - z_min)
     except Exception as e:
         print(f"Error scanning {file_path}: {e}")
         return None, None
 
 def get_global_stats(input_path, split="train", max_workers=32):
-    print(f"--- Pass 1: Scanning {split} set for Global Statistics (Parallel) ---")
+    print(f"--- Pass 1: Scanning {split} set for Global Statistics ---")
     folder = os.path.join(input_path, split)
     files = [os.path.join(folder, f) for f in os.listdir(folder) if f.endswith('.ply')]
     
-    all_intensities = []
-    max_hags = []
-    
+    all_intensities, max_hags = [], []
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
         futures = [executor.submit(scan_single_file, f) for f in files]
         for future in tqdm(as_completed(futures), total=len(files), desc="Scanning tiles"):
@@ -41,140 +34,147 @@ def get_global_stats(input_path, split="train", max_workers=32):
                 all_intensities.append(ints)
                 max_hags.append(hag)
                 
-    global_intensities = np.concatenate(all_intensities)
-    intensity_max = np.percentile(global_intensities, 99.9)
-    suggested_z_scale = np.max(max_hags)
+    intensity_max = np.percentile(np.concatenate(all_intensities), 99.9)
+    suggested_z_scale = np.percentile(max_hags, 95) 
     
     print(f"\n[SCAN COMPLETED]")
     print(f"-> Detected Max Intensity (99.9th %): {intensity_max:.2f}")
-    print(f"-> Detected Max Height Difference: {suggested_z_scale:.2f} meters")
+    print(f"-> Suggested Z-Scale (95th %): {suggested_z_scale:.2f} meters")
     
-    val = input("\nPress Enter to use defaults, 'n' to exit, or enter custom values int z (e.g., '64000 100'): ").strip()
+    print("\nFormat: [IntensityMax] [Z-Scale]")
+    print(f"Example: '61430 80' or just press Enter for defaults ({intensity_max:.0f} {suggested_z_scale:.1f})")
+    val = input(">> ").strip()
     
-    if val.lower() == 'n':
-        exit()
-    if val.lower() == 'y' or val == "":
+    if not val:
         return intensity_max, suggested_z_scale
     
     parts = val.split()
     if len(parts) == 1:
-        # If only one number is provided, assume it's the Z-scale
+        # If only one number provided, keep detected intensity, override Z
         return intensity_max, float(parts[0])
     else:
-        # If two numbers are provided, first is intensity, second is Z-scale
+        # Override both
         return float(parts[0]), float(parts[1])
 
-def get_ground_elevation(points, grid_size=5.0):
-    """Calculates DTM for the 500m tile."""
+from scipy.interpolate import NearestNDInterpolator, LinearNDInterpolator
+
+def get_ground_elevation(points, labels, grid_size=2.0):
+    ground_mask = (labels == 1)
+    
+    if np.sum(ground_mask) < 100:
+        target_points = points
+        actual_grid_size = 30.0 
+    else:
+        target_points = points[ground_mask]
+        actual_grid_size = grid_size
+
     x_min, y_min = np.min(points[:, :2], axis=0)
     x_max, y_max = np.max(points[:, :2], axis=0)
-    nx, ny = int((x_max - x_min) / grid_size) + 1, int((y_max - y_min) / grid_size) + 1
+    
+    nx = int((x_max - x_min) / actual_grid_size) + 1
+    ny = int((y_max - y_min) / actual_grid_size) + 1
     
     grid = np.zeros((nx, ny)) + np.nan
-    ix = ((points[:, 0] - x_min) / grid_size).astype(int)
-    iy = ((points[:, 1] - y_min) / grid_size).astype(int)
+    ix = ((target_points[:, 0] - x_min) / actual_grid_size).astype(int)
+    iy = ((target_points[:, 1] - y_min) / actual_grid_size).astype(int)
     
     for i in range(nx):
         for j in range(ny):
             mask = (ix == i) & (iy == j)
             if np.any(mask):
-                grid[i, j] = np.percentile(points[mask, 2], 5)
+                # 5th percentile is more stable than 2nd for small grids
+                grid[i, j] = np.percentile(target_points[mask, 2], 5)
                 
-    valid = ~np.isnan(grid)
-    coords = np.array(np.where(valid)).T
-    itp = NearestNDInterpolator(coords, grid[valid])
+    valid_mask = ~np.isnan(grid)
+    if not np.any(valid_mask):
+        return x_min, y_min, actual_grid_size, np.full((nx, ny), np.min(points[:, 2]))
+        
+    coords_valid = np.array(np.where(valid_mask)).T
+    values_valid = grid[valid_mask]
     
-    # Fill holes
-    invalid_coords = np.array(np.where(~valid)).T
-    if len(invalid_coords) > 0:
-        grid[~valid] = itp(invalid_coords)
-    return x_min, y_min, grid_size, grid
+    # 1. Fill holes with Linear (Smooth Ramps under buildings)
+    itp_linear = LinearNDInterpolator(coords_valid, values_valid)
+    all_coords = np.array(np.where(~valid_mask)).T
+    grid[~valid_mask] = itp_linear(all_coords)
+    
+    # 2. Fill remaining NaNs with Nearest (Only for edges where Linear fails)
+    if np.any(np.isnan(grid)):
+        itp_nearest = NearestNDInterpolator(coords_valid, values_valid)
+        nan_mask = np.isnan(grid)
+        grid[nan_mask] = itp_nearest(np.array(np.where(nan_mask)).T)
+        
+    return x_min, y_min, actual_grid_size, grid
 
 def process_single_file(file_name, input_split_path, output_split_path, int_max, z_scale, voxel_size):
-    """Worker function to process one 500m PLY file into many 50m tiles."""
     try:
         plydata = PlyData.read(os.path.join(input_split_path, file_name))
         data = plydata.elements[0].data
         points = np.stack([data['x'], data['y'], data['z']], axis=1).astype(np.float32)
         intensity = (data['intensity'].astype(np.float32) / int_max).clip(0, 1).reshape(-1, 1)
         segments = data['sem_class'].astype(np.int64) - 1
-        
-        min_x, min_y, g_size, g_model = get_ground_elevation(points)
+        raw_segments = data['sem_class'].astype(np.int64) # Keep 1-8 for DTM
+
+        min_x, min_y, g_size, g_model = get_ground_elevation(points, raw_segments)  
         tile_size = 50.0
         
-        # Iterate through 10x10 grid (for a 500m tile)
         for x_s in np.arange(min_x, min_x + 500, tile_size):
             for y_s in np.arange(min_y, min_y + 500, tile_size):
                 mask = (points[:, 0] >= x_s) & (points[:, 0] < x_s + tile_size) & \
                        (points[:, 1] >= y_s) & (points[:, 1] < y_s + tile_size)
-                
-                if np.sum(mask) < 500: 
-                    continue
+                if np.sum(mask) < 500: continue
                 
                 c_p, c_i, c_s = points[mask], intensity[mask], segments[mask]
                 
-                # Voxelize (using bit-shifting or string keys can be slow, 
-                # but unique with axis=0 is often faster for small batches)
-                l_min = np.min(c_p, axis=0)
-                g_c = np.floor((c_p - l_min) / voxel_size).astype(np.int64)
+                # --- VOXELIZATION ---
+                # Snap raw coordinates to grid before normalization
+                g_c = np.floor(c_p / voxel_size).astype(np.int64)
                 _, idx = np.unique(g_c, axis=0, return_index=True)
                 c_p, c_i, c_s = c_p[idx], c_i[idx], c_s[idx]
                 
-                # Normalization
+                # --- NORMALIZATION ---
                 ix = ((c_p[:, 0] - min_x) / g_size).astype(int).clip(0, g_model.shape[0]-1)
                 iy = ((c_p[:, 1] - min_y) / g_size).astype(int).clip(0, g_model.shape[1]-1)
                 z_ref = g_model[ix, iy]
                 
+                # Height Above Ground (HAG) with clipping
+                # Force ground to 0, and cap height at z_scale
+                hag = (c_p[:, 2] - z_ref).clip(0, z_scale)
+                
                 norm_coords = np.zeros_like(c_p)
                 norm_coords[:, 0] = (c_p[:, 0] - (x_s + 25.0)) / 25.0
                 norm_coords[:, 1] = (c_p[:, 1] - (y_s + 25.0)) / 25.0
-                norm_coords[:, 2] = ((c_p[:, 2] - z_ref) / (z_scale / 2.0)) - 1.0
+                norm_coords[:, 2] = (hag / (z_scale / 2.0)) - 1.0 # 0m becomes -1.0
                 
-                # Save
-                tile_folder_name = f"{file_name[:-4]}_{int(x_s)}_{int(y_s)}"
-                tile_path = os.path.join(output_split_path, tile_folder_name)
-                os.makedirs(tile_path, exist_ok=True)
-                
-                np.save(os.path.join(tile_path, "coord.npy"), norm_coords.astype(np.float32))
-                np.save(os.path.join(tile_path, "strength.npy"), c_i.astype(np.float32))
-                np.save(os.path.join(tile_path, "segment.npy"), c_s.astype(np.int32))
+                tile_folder = os.path.join(output_split_path, f"{file_name[:-4]}_{int(x_s)}_{int(y_s)}")
+                os.makedirs(tile_folder, exist_ok=True)
+                np.save(os.path.join(tile_folder, "coord.npy"), norm_coords.astype(np.float32))
+                np.save(os.path.join(tile_folder, "strength.npy"), c_i.astype(np.float32))
+                np.save(os.path.join(tile_folder, "segment.npy"), c_s.astype(np.int32))
         return True
     except Exception as e:
         print(f"Error processing {file_name}: {e}")
         return False
 
-def process_split(split, input_path, output_path, int_max, z_scale, voxel_size, max_workers=32):
-    print(f"\n--- Pass 2: Processing {split} split (Parallel) ---")
-    input_split_path = os.path.join(input_path, split)
-    output_split_path = os.path.join(output_path, split)
-    os.makedirs(output_split_path, exist_ok=True)
-    
-    files = [f for f in os.listdir(input_split_path) if f.endswith('.ply')]
-    
-    with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        futures = [
-            executor.submit(process_single_file, f, input_split_path, output_split_path, int_max, z_scale, voxel_size) 
-            for f in files
-        ]
-        for _ in tqdm(as_completed(futures), total=len(files), desc=f"Processing {split}"):
-            pass
+def process_split(split, input_path, output_path, int_max, z_scale, voxel_size, cores):
+    print(f"\n--- Pass 2: Processing {split} split (Voxel: {voxel_size}m) ---")
+    in_path, out_path = os.path.join(input_path, split), os.path.join(output_path, split)
+    os.makedirs(out_path, exist_ok=True)
+    files = [f for f in os.listdir(in_path) if f.endswith('.ply')]
+    with ProcessPoolExecutor(max_workers=cores) as executor:
+        futures = [executor.submit(process_single_file, f, in_path, out_path, int_max, z_scale, voxel_size) for f in files]
+        for _ in tqdm(as_completed(futures), total=len(files), desc=f"Processing {split}"): pass
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--input_path", default="/home/fractal01/PointSSM/data/DALESObjects")
-    parser.add_argument("--output_path", default="/home/fractal01/PointceptALS/data/dales_scientific")
-    parser.add_argument("--voxel_size", type=float, default=0.1)
-    parser.add_argument("--cores", type=int, default=32)
+    parser.add_argument("--output_path", default="/home/fractal01/PointceptALS/data/DALESObjects_training_data")
+    parser.add_argument("--voxel_size", type=float, default=0.15)
+    parser.add_argument("--cores", type=int, default=16)
     args = parser.parse_args()
     
-    # 1. Parallel Scan
-    int_max, z_scale = get_global_stats(args.input_path, split="train", max_workers=args.cores)
+    int_max, z_scale = get_global_stats(args.input_path, "train", args.cores)
+    process_split("train", args.input_path, args.output_path, int_max, z_scale, args.voxel_size, args.cores)
+    process_split("test", args.input_path, args.output_path, int_max, z_scale, args.voxel_size, args.cores)
     
-    # 2. Parallel Process
-    process_split("train", args.input_path, args.output_path, int_max, z_scale, args.voxel_size, max_workers=args.cores)
-    process_split("test", args.input_path, args.output_path, int_max, z_scale, args.voxel_size, max_workers=args.cores)
-    
-    # 3. Meta data
     with open(os.path.join(args.output_path, "meta.json"), "w") as f:
-        json.dump({"int_max": float(int_max), "z_scale": float(z_scale)}, f)
-    print("\nDone.")
+        json.dump({"int_max": float(int_max), "z_scale": float(z_scale), "voxel_size": args.voxel_size}, f)
