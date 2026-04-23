@@ -515,7 +515,7 @@ class Embedding(PointModule):
         return point
 
 
-@MODELS.register_module("PT-v3m1")
+@MODELS.register_module(["PT-v3m1", "PTv3"])
 class PointTransformerV3(PointModule):
     def __init__(
         self,

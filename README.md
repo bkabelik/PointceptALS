@@ -23,7 +23,10 @@ pip install -e ./libs/pointops --no-build-isolation
 pip install -e ./libs/pointgroup_ops --no-build-isolation
 ```
 
+
+
 # prepare dales:
+# we switched from normalized xyz to m
 ```bash
 python pointcept/datasets/preprocessing/dales/preprocess_dales.py --input_path "/home/fractal01/PointceptALS/data/DALESObjects" --output_path "/home/fractal01/PointceptALS/data/DALESObjects_training_data" --cores 16
 ```
@@ -41,6 +44,11 @@ python tools/check_dtm.py /home/fractal01/PointceptALS/data/DALESObjects/train/5
 
 ```
 
+# start training
+```bash
+ PYTHONPATH=. python tools/train.py --config-file configs/dales/ptv3_dales.py --options save_path=exp/dales/ptv3_run_01_verify
+
+```
 
 
 # pointcept documentation

@@ -91,7 +91,7 @@ class TileViewer:
                         depth = depth_array[y, x]
                         if depth < 1.0:
                             world_point = self.scene_widget.scene.camera.unproject(
-                                event.x, event.y, depth, 
+                                x, y, depth,  # <--- Changed from event.x, event.y
                                 self.scene_widget.frame.width, self.scene_widget.frame.height)
                             txt = f"X: {world_point[0]:.3f}, Y: {world_point[1]:.3f}, Z: {world_point[2]:.3f}"
                             gui.Application.instance.post_to_main_thread(self.window, lambda: self._update_label(txt))
