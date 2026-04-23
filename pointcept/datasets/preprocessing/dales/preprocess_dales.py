@@ -4,12 +4,11 @@ import numpy as np
 import json
 from plyfile import PlyData
 from tqdm import tqdm
-from scipy.interpolate import NearestNDInterpolator
+from scipy.interpolate import NearestNDInterpolator, LinearNDInterpolator
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 def scan_single_file(file_path):
-    """Worker function for scanning global stats."""
     try:
         plydata = PlyData.read(file_path)
         data = plydata.elements[0].data
@@ -47,20 +46,13 @@ def get_global_stats(input_path, split="train", max_workers=32):
     
     if not val:
         return intensity_max, suggested_z_scale
-    
     parts = val.split()
     if len(parts) == 1:
-        # If only one number provided, keep detected intensity, override Z
         return intensity_max, float(parts[0])
-    else:
-        # Override both
-        return float(parts[0]), float(parts[1])
-
-from scipy.interpolate import NearestNDInterpolator, LinearNDInterpolator
+    return float(parts[0]), float(parts[1])
 
 def get_ground_elevation(points, labels, grid_size=2.0):
     ground_mask = (labels == 1)
-    
     if np.sum(ground_mask) < 100:
         target_points = points
         actual_grid_size = 30.0 
@@ -70,20 +62,27 @@ def get_ground_elevation(points, labels, grid_size=2.0):
 
     x_min, y_min = np.min(points[:, :2], axis=0)
     x_max, y_max = np.max(points[:, :2], axis=0)
-    
     nx = int((x_max - x_min) / actual_grid_size) + 1
     ny = int((y_max - y_min) / actual_grid_size) + 1
     
-    grid = np.zeros((nx, ny)) + np.nan
-    ix = ((target_points[:, 0] - x_min) / actual_grid_size).astype(int)
-    iy = ((target_points[:, 1] - y_min) / actual_grid_size).astype(int)
+    # --- Vectorized Binning ---
+    ix = ((target_points[:, 0] - x_min) / actual_grid_size).astype(int).clip(0, nx-1)
+    iy = ((target_points[:, 1] - y_min) / actual_grid_size).astype(int).clip(0, ny-1)
+    flat_indices = ix * ny + iy
     
-    for i in range(nx):
-        for j in range(ny):
-            mask = (ix == i) & (iy == j)
-            if np.any(mask):
-                # 5th percentile is more stable than 2nd for small grids
-                grid[i, j] = np.percentile(target_points[mask, 2], 5)
+    sort_idx = np.argsort(flat_indices)
+    sorted_indices = flat_indices[sort_idx]
+    sorted_z = target_points[sort_idx, 2]
+    
+    diffs = np.diff(sorted_indices)
+    split_indices = np.where(diffs > 0)[0] + 1
+    z_groups = np.split(sorted_z, split_indices)
+    unique_bins = sorted_indices[np.append([0], split_indices)]
+    
+    grid = np.full((nx, ny), np.nan)
+    for bin_idx, group in zip(unique_bins, z_groups):
+        if len(group) > 0:
+            grid[bin_idx // ny, bin_idx % ny] = np.percentile(group, 5)
                 
     valid_mask = ~np.isnan(grid)
     if not np.any(valid_mask):
@@ -92,12 +91,10 @@ def get_ground_elevation(points, labels, grid_size=2.0):
     coords_valid = np.array(np.where(valid_mask)).T
     values_valid = grid[valid_mask]
     
-    # 1. Fill holes with Linear (Smooth Ramps under buildings)
     itp_linear = LinearNDInterpolator(coords_valid, values_valid)
     all_coords = np.array(np.where(~valid_mask)).T
     grid[~valid_mask] = itp_linear(all_coords)
     
-    # 2. Fill remaining NaNs with Nearest (Only for edges where Linear fails)
     if np.any(np.isnan(grid)):
         itp_nearest = NearestNDInterpolator(coords_valid, values_valid)
         nan_mask = np.isnan(grid)
@@ -112,7 +109,7 @@ def process_single_file(file_name, input_split_path, output_split_path, int_max,
         points = np.stack([data['x'], data['y'], data['z']], axis=1).astype(np.float32)
         intensity = (data['intensity'].astype(np.float32) / int_max).clip(0, 1).reshape(-1, 1)
         segments = data['sem_class'].astype(np.int64) - 1
-        raw_segments = data['sem_class'].astype(np.int64) # Keep 1-8 for DTM
+        raw_segments = data['sem_class'].astype(np.int64) 
 
         min_x, min_y, g_size, g_model = get_ground_elevation(points, raw_segments)  
         tile_size = 50.0
@@ -125,25 +122,21 @@ def process_single_file(file_name, input_split_path, output_split_path, int_max,
                 
                 c_p, c_i, c_s = points[mask], intensity[mask], segments[mask]
                 
-                # --- VOXELIZATION ---
-                # Snap raw coordinates to grid before normalization
+                # Voxelize
                 g_c = np.floor(c_p / voxel_size).astype(np.int64)
                 _, idx = np.unique(g_c, axis=0, return_index=True)
                 c_p, c_i, c_s = c_p[idx], c_i[idx], c_s[idx]
                 
-                # --- NORMALIZATION ---
+                # Normalization
                 ix = ((c_p[:, 0] - min_x) / g_size).astype(int).clip(0, g_model.shape[0]-1)
                 iy = ((c_p[:, 1] - min_y) / g_size).astype(int).clip(0, g_model.shape[1]-1)
                 z_ref = g_model[ix, iy]
                 
-                # Height Above Ground (HAG) with clipping
-                # Force ground to 0, and cap height at z_scale
                 hag = (c_p[:, 2] - z_ref).clip(0, z_scale)
-                
                 norm_coords = np.zeros_like(c_p)
                 norm_coords[:, 0] = (c_p[:, 0] - (x_s + 25.0)) / 25.0
                 norm_coords[:, 1] = (c_p[:, 1] - (y_s + 25.0)) / 25.0
-                norm_coords[:, 2] = (hag / (z_scale / 2.0)) - 1.0 # 0m becomes -1.0
+                norm_coords[:, 2] = (hag / (z_scale / 2.0)) - 1.0 
                 
                 tile_folder = os.path.join(output_split_path, f"{file_name[:-4]}_{int(x_s)}_{int(y_s)}")
                 os.makedirs(tile_folder, exist_ok=True)
@@ -157,11 +150,11 @@ def process_single_file(file_name, input_split_path, output_split_path, int_max,
 
 def process_split(split, input_path, output_path, int_max, z_scale, voxel_size, cores):
     print(f"\n--- Pass 2: Processing {split} split (Voxel: {voxel_size}m) ---")
-    in_path, out_path = os.path.join(input_path, split), os.path.join(output_path, split)
-    os.makedirs(out_path, exist_ok=True)
-    files = [f for f in os.listdir(in_path) if f.endswith('.ply')]
+    in_p, out_p = os.path.join(input_path, split), os.path.join(output_path, split)
+    os.makedirs(out_p, exist_ok=True)
+    files = [f for f in os.listdir(in_p) if f.endswith('.ply')]
     with ProcessPoolExecutor(max_workers=cores) as executor:
-        futures = [executor.submit(process_single_file, f, in_path, out_path, int_max, z_scale, voxel_size) for f in files]
+        futures = [executor.submit(process_single_file, f, in_p, out_p, int_max, z_scale, voxel_size) for f in files]
         for _ in tqdm(as_completed(futures), total=len(files), desc=f"Processing {split}"): pass
 
 if __name__ == "__main__":
@@ -169,7 +162,7 @@ if __name__ == "__main__":
     parser.add_argument("--input_path", default="/home/fractal01/PointSSM/data/DALESObjects")
     parser.add_argument("--output_path", default="/home/fractal01/PointceptALS/data/DALESObjects_training_data")
     parser.add_argument("--voxel_size", type=float, default=0.15)
-    parser.add_argument("--cores", type=int, default=16)
+    parser.add_argument("--cores", type=int, default=32)
     args = parser.parse_args()
     
     int_max, z_scale = get_global_stats(args.input_path, "train", args.cores)

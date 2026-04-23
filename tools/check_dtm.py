@@ -3,14 +3,17 @@ import argparse
 import numpy as np
 import open3d as o3d
 from plyfile import PlyData
-from scipy.interpolate import NearestNDInterpolator
-
 from scipy.interpolate import NearestNDInterpolator, LinearNDInterpolator
 
 def get_ground_elevation(points, labels, grid_size=2.0):
+    """
+    Vectorized High-Accuracy DTM logic.
+    Identical to the preprocessing script for consistency.
+    """
     ground_mask = (labels == 1)
     
     if np.sum(ground_mask) < 100:
+        print("Warning: Low ground point count. Using fallback.")
         target_points = points
         actual_grid_size = 30.0 
     else:
@@ -23,16 +26,24 @@ def get_ground_elevation(points, labels, grid_size=2.0):
     nx = int((x_max - x_min) / actual_grid_size) + 1
     ny = int((y_max - y_min) / actual_grid_size) + 1
     
-    grid = np.zeros((nx, ny)) + np.nan
-    ix = ((target_points[:, 0] - x_min) / actual_grid_size).astype(int)
-    iy = ((target_points[:, 1] - y_min) / actual_grid_size).astype(int)
+    # --- Vectorized Binning (The Speed Hack) ---
+    ix = ((target_points[:, 0] - x_min) / actual_grid_size).astype(int).clip(0, nx-1)
+    iy = ((target_points[:, 1] - y_min) / actual_grid_size).astype(int).clip(0, ny-1)
+    flat_indices = ix * ny + iy
     
-    for i in range(nx):
-        for j in range(ny):
-            mask = (ix == i) & (iy == j)
-            if np.any(mask):
-                # 5th percentile is more stable than 2nd for small grids
-                grid[i, j] = np.percentile(target_points[mask, 2], 5)
+    sort_idx = np.argsort(flat_indices)
+    sorted_indices = flat_indices[sort_idx]
+    sorted_z = target_points[sort_idx, 2]
+    
+    diffs = np.diff(sorted_indices)
+    split_indices = np.where(diffs > 0)[0] + 1
+    z_groups = np.split(sorted_z, split_indices)
+    unique_bins = sorted_indices[np.append([0], split_indices)]
+    
+    grid = np.full((nx, ny), np.nan)
+    for bin_idx, group in zip(unique_bins, z_groups):
+        if len(group) > 0:
+            grid[bin_idx // ny, bin_idx % ny] = np.percentile(group, 5)
                 
     valid_mask = ~np.isnan(grid)
     if not np.any(valid_mask):
@@ -41,12 +52,12 @@ def get_ground_elevation(points, labels, grid_size=2.0):
     coords_valid = np.array(np.where(valid_mask)).T
     values_valid = grid[valid_mask]
     
-    # 1. Fill holes with Linear (Smooth Ramps under buildings)
+    # Linear Interpolation (Smooth Slopes)
     itp_linear = LinearNDInterpolator(coords_valid, values_valid)
     all_coords = np.array(np.where(~valid_mask)).T
     grid[~valid_mask] = itp_linear(all_coords)
     
-    # 2. Fill remaining NaNs with Nearest (Only for edges where Linear fails)
+    # Nearest Fallback for edges
     if np.any(np.isnan(grid)):
         itp_nearest = NearestNDInterpolator(coords_valid, values_valid)
         nan_mask = np.isnan(grid)
@@ -62,63 +73,49 @@ def visualize_dtm(ply_path):
     points = np.stack([data['x'], data['y'], data['z']], axis=1).astype(np.float32)
     labels = data['sem_class'].astype(np.int64)
     
-    # Subsample points for speed in the viewer (1 in 10)
     points_sub = points[::10]
     labels_sub = labels[::10]
     
-    print("Calculating Class-Aware DTM...")
+    print("Calculating Vectorized Linear DTM...")
     min_x, min_y, g_size, g_model = get_ground_elevation(points, labels)
     
-    # Create grid for DTM visualization
     nx, ny = g_model.shape
     dtm_points = []
     lines = []
     
+    # We still loop here for visualization geometry, but it's much faster 
+    # because the heavy math (binning/percentile) is already done.
     for i in range(nx):
         for j in range(ny):
             x = min_x + i * g_size
             y = min_y + j * g_size
             z = g_model[i, j]
             dtm_points.append([x, y, z])
-            
-            # Grid connectivity
-            if i < nx - 1:
-                lines.append([i * ny + j, (i + 1) * ny + j])
-            if j < ny - 1:
-                lines.append([i * ny + j, i * ny + (j + 1)])
+            if i < nx - 1: lines.append([i * ny + j, (i + 1) * ny + j])
+            if j < ny - 1: lines.append([i * ny + j, i * ny + (j + 1)])
 
-    # Create Open3D PointCloud
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(points_sub)
-    
-    # Optional: Color points by class so we can see what's ground
-    # Ground = Green, Others = Gray
     colors = np.zeros_like(points_sub)
-    colors[:] = [0.4, 0.4, 0.4] # Default Gray
-    colors[labels_sub == 1] = [0.0, 0.8, 0.0] # Ground Green
+    colors[:] = [0.3, 0.3, 0.3] # Gray
+    colors[labels_sub == 1] = [0.0, 1.0, 0.0] # Ground Green
     pcd.colors = o3d.utility.Vector3dVector(colors)
     
-    # Create DTM Grid (Red)
     line_set = o3d.geometry.LineSet()
     line_set.points = o3d.utility.Vector3dVector(np.array(dtm_points))
     line_set.lines = o3d.utility.Vector2iVector(np.array(lines))
     line_set.paint_uniform_color([1, 0, 0]) # Red
     
-    print("\n[VIEWER CONTROLS]")
-    print("-> RED GRID: Calculated DTM (Ground Model)")
-    print("-> GREEN POINTS: Class 1 (Ground)")
-    print("-> GRAY POINTS: Everything else (Buildings, Trees, etc.)")
-    
+    print("Viewer Ready.")
     o3d.visualization.draw_geometries([pcd, line_set], 
-                                      window_name="Class-Aware DTM Check",
+                                      window_name="Fast Class-Aware DTM",
                                       width=1280, height=720)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("ply_file", help="Path to raw DALES .ply file")
     args = parser.parse_args()
-    
-    if not os.path.exists(args.ply_file):
-        print(f"Error: {args.ply_file} not found.")
-    else:
+    if os.path.exists(args.ply_file):
         visualize_dtm(args.ply_file)
+    else:
+        print("File not found.")
