@@ -1,11 +1,13 @@
 _base_ = ["../_base_/default_runtime.py"]
 
 # --- General Config ---
-batch_size = 4  # Total BS
+batch_size = 2  # Total BS
 epoch = 100
-eval_epoch = 1
+eval_epoch = 100
 empty_cache = True
 enable_amp = True
+amp_dtype = "bfloat16"
+clip_grad = 0.5
 
 # --- Model Config (PTv3) ---
 model = dict(
@@ -41,16 +43,16 @@ model = dict(
 )
 
 # --- Optimization Config ---
-optimizer = dict(type="AdamW", lr=0.006, weight_decay=0.05)
+optimizer = dict(type="AdamW", lr=0.004, weight_decay=0.05)
 scheduler = dict(
     type="OneCycleLR",
-    max_lr=[0.006, 0.0006],
-    pct_start=0.05,
+    max_lr=[0.004, 0.0004],
+    pct_start=0.1,
     anneal_strategy="cos",
     div_factor=10.0,
     final_div_factor=1000.0,
 )
-param_dicts = [dict(keyword="block", lr=0.0006)]
+param_dicts = [dict(keyword="block", lr=0.0004)]
 
 # --- Dataset Config ---
 dataset_type = "DefaultDataset"
