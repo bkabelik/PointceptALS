@@ -49,6 +49,22 @@ python tools/check_dtm.py /home/fractal01/PointceptALS/data/DALESObjects/train/5
  PYTHONPATH=. python tools/train.py --config-file configs/dales/ptv3_dales.py --options save_path=exp/dales/ptv3_run_01_verify
 
 ```
+```bash
+Val result: mIoU/mAcc/allAcc 0.7908/0.8463/0.9662.
+Class_0-Ground Result: iou/accuracy 0.9426/0.9632
+Class_1-Vegetation Result: iou/accuracy 0.9171/0.9677
+Class_2-Cars Result: iou/accuracy 0.8622/0.9315
+Class_3-Trucks Result: iou/accuracy 0.4078/0.4914
+Class_4-Power lines Result: iou/accuracy 0.9482/0.9620
+Class_5-Fences Result: iou/accuracy 0.6487/0.7615
+Class_6-Poles Result: iou/accuracy 0.6277/0.7095
+Class_7-Buildings Result: iou/accuracy 0.9721/0.9837
+```
+
+# prediction
+```bash
+python prediction.py --folder /home/fractal01/PointceptALS/data/demo --model_path exp/dales/ptv3_dales/model/model_best.pth -- config_file /home/fractal01/PointceptALS/configs/dales/ptv3_dales.py --noise_filter interactive --post_process no --show_thinned --show_predicted
+```
 
 
 # pointcept documentation
