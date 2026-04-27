@@ -2,8 +2,8 @@ _base_ = ["../_base_/default_runtime.py"]
 
 # --- General Config ---
 batch_size = 2  # Total BS
-epoch = 100
-eval_epoch = 100
+epoch = 150
+eval_epoch = 150
 empty_cache = True
 enable_amp = True
 amp_dtype = "bfloat16"
@@ -67,7 +67,6 @@ data = dict(
         split="train",
         data_root=data_root,
         transform=[
-            dict(type="CenterShift", apply_z=False),
             dict(type="RandomRotate", angle=[-3.1415926, 3.1415926], axis="z", center=[0, 0, 0], p=0.5),
             dict(type="RandomScale", scale=[0.9, 1.1]),
             dict(type="RandomFlip", p=0.5),
@@ -82,7 +81,16 @@ data = dict(
         split="test",
         data_root=data_root,
         transform=[
-            dict(type="CenterShift", apply_z=False),
+            dict(type="GridSample", grid_size=0.16, hash_type="fnv", mode="train", return_grid_coord=True),
+            dict(type="ToTensor"),
+            dict(type="Collect", keys=("coord", "grid_coord", "segment"), feat_keys=("coord", "strength")),
+        ],
+    ),
+    test=dict(
+        type=dataset_type,
+        split="test",
+        data_root=data_root,
+        transform=[
             dict(type="GridSample", grid_size=0.16, hash_type="fnv", mode="train", return_grid_coord=True),
             dict(type="ToTensor"),
             dict(type="Collect", keys=("coord", "grid_coord", "segment"), feat_keys=("coord", "strength")),

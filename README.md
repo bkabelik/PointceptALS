@@ -26,7 +26,7 @@ pip install -e ./libs/pointgroup_ops --no-build-isolation
 
 
 # prepare dales:
-# we switched from normalized xyz to m
+# we switched from normalized xyz to m and HAG (z) -> xy= -25 to +25; z=0(ground) to height above ground
 ```bash
 python pointcept/datasets/preprocessing/dales/preprocess_dales.py --input_path "/home/fractal01/PointceptALS/data/DALESObjects" --output_path "/home/fractal01/PointceptALS/data/DALESObjects_training_data" --cores 16
 ```
@@ -50,20 +50,20 @@ python tools/check_dtm.py /home/fractal01/PointceptALS/data/DALESObjects/train/5
 
 ```
 ```bash
-Val result: mIoU/mAcc/allAcc 0.7908/0.8463/0.9662.
-Class_0-Ground Result: iou/accuracy 0.9426/0.9632
-Class_1-Vegetation Result: iou/accuracy 0.9171/0.9677
-Class_2-Cars Result: iou/accuracy 0.8622/0.9315
-Class_3-Trucks Result: iou/accuracy 0.4078/0.4914
-Class_4-Power lines Result: iou/accuracy 0.9482/0.9620
-Class_5-Fences Result: iou/accuracy 0.6487/0.7615
-Class_6-Poles Result: iou/accuracy 0.6277/0.7095
-Class_7-Buildings Result: iou/accuracy 0.9721/0.9837
+Val result: mIoU/mAcc/allAcc 0.8310/0.8851/0.9811.
+Class_0-Ground Result: iou/accuracy 0.9728/0.9908
+Class_1-Vegetation Result: iou/accuracy 0.9543/0.9716
+Class_2-Cars Result: iou/accuracy 0.8875/0.9625
+Class_3-Trucks Result: iou/accuracy 0.4764/0.5778
+Class_4-Power lines Result: iou/accuracy 0.9629/0.9773
+Class_5-Fences Result: iou/accuracy 0.6808/0.7763
+Class_6-Poles Result: iou/accuracy 0.7414/0.8395
+Class_7-Buildings Result: iou/accuracy 0.9721/0.9848
 ```
 
 # prediction
 ```bash
-python prediction.py --folder /home/fractal01/PointceptALS/data/demo --model_path exp/dales/ptv3_dales/model/model_best.pth -- config_file /home/fractal01/PointceptALS/configs/dales/ptv3_dales.py --noise_filter interactive --post_process no --show_thinned --show_predicted
+ python prediction.py --folder /home/fractal01/PointceptALS/data/demo --model_path exp/dales/ptv3_dales/model/model_best.pth -- config_file /home/fractal01/PointceptALS/configs/dales/ptv3_dales.py --noise_filter interactive --post_process no --show_thinned yes --show_predicted yes
 ```
 
 
