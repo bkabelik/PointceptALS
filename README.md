@@ -26,7 +26,6 @@ pip install -e ./libs/pointgroup_ops --no-build-isolation
 
 
 # prepare dales:
-# we switched from normalized xyz to m and HAG (z) -> xy= -25 to +25; z=0(ground) to height above ground
 ```bash
 python pointcept/datasets/preprocessing/dales/preprocess_dales.py --input_path "/home/fractal01/PointceptALS/data/DALESObjects" --output_path "/home/fractal01/PointceptALS/data/DALESObjects_training_data" --cores 16
 ```
@@ -63,7 +62,7 @@ Class_7-Buildings Result: iou/accuracy 0.9721/0.9848
 
 # prediction
 ```bash
- python prediction.py --folder /home/fractal01/PointceptALS/data/demo --model_path exp/dales/ptv3_dales/model/model_best.pth -- config_file /home/fractal01/PointceptALS/configs/dales/ptv3_dales.py --noise_filter interactive --post_process no --show_thinned yes --show_predicted yes
+python prediction.py --folder /home/fractal01/PointceptALS/data/demo --model_path /home/fractal01/PointceptALS/exp/dales/ptv3_run_03_nohag/model/model_best.pth --config_file /home/fractal01/PointceptALS/configs/dales/ptv3_dales.py --noise_filter interactive --show_predicted yes --intensity_scale 2000
 ```
 
 
