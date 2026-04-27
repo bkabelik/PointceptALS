@@ -21,6 +21,7 @@ conda activate pointcept-torch2.5.0-cu12.4
 pip install flash-attn --no-build-isolation
 pip install -e ./libs/pointops --no-build-isolation
 pip install -e ./libs/pointgroup_ops --no-build-isolation
+pip install -e ./libs/pointrope --no-build-isolation
 ```
 
 
