@@ -51,57 +51,6 @@ def get_global_stats(input_path, split="train", max_workers=32):
         return intensity_max, float(parts[0])
     return float(parts[0]), float(parts[1])
 
-def get_ground_elevation(points, labels, grid_size=2.0):
-    ground_mask = (labels == 1)
-    if np.sum(ground_mask) < 100:
-        target_points = points
-        actual_grid_size = 30.0 
-    else:
-        target_points = points[ground_mask]
-        actual_grid_size = grid_size
-
-    x_min, y_min = np.min(points[:, :2], axis=0)
-    x_max, y_max = np.max(points[:, :2], axis=0)
-    nx = int((x_max - x_min) / actual_grid_size) + 1
-    ny = int((y_max - y_min) / actual_grid_size) + 1
-    
-    # --- Vectorized Binning ---
-    ix = ((target_points[:, 0] - x_min) / actual_grid_size).astype(int).clip(0, nx-1)
-    iy = ((target_points[:, 1] - y_min) / actual_grid_size).astype(int).clip(0, ny-1)
-    flat_indices = ix * ny + iy
-    
-    sort_idx = np.argsort(flat_indices)
-    sorted_indices = flat_indices[sort_idx]
-    sorted_z = target_points[sort_idx, 2]
-    
-    diffs = np.diff(sorted_indices)
-    split_indices = np.where(diffs > 0)[0] + 1
-    z_groups = np.split(sorted_z, split_indices)
-    unique_bins = sorted_indices[np.append([0], split_indices)]
-    
-    grid = np.full((nx, ny), np.nan)
-    for bin_idx, group in zip(unique_bins, z_groups):
-        if len(group) > 0:
-            grid[bin_idx // ny, bin_idx % ny] = np.percentile(group, 5)
-                
-    valid_mask = ~np.isnan(grid)
-    if not np.any(valid_mask):
-        return x_min, y_min, actual_grid_size, np.full((nx, ny), np.min(points[:, 2]))
-        
-    coords_valid = np.array(np.where(valid_mask)).T
-    values_valid = grid[valid_mask]
-    
-    itp_linear = LinearNDInterpolator(coords_valid, values_valid)
-    all_coords = np.array(np.where(~valid_mask)).T
-    grid[~valid_mask] = itp_linear(all_coords)
-    
-    if np.any(np.isnan(grid)):
-        itp_nearest = NearestNDInterpolator(coords_valid, values_valid)
-        nan_mask = np.isnan(grid)
-        grid[nan_mask] = itp_nearest(np.array(np.where(nan_mask)).T)
-        
-    return x_min, y_min, actual_grid_size, grid
-
 def process_single_file(file_name, input_split_path, output_split_path, int_max, z_scale, voxel_size):
     try:
         plydata = PlyData.read(os.path.join(input_split_path, file_name))
@@ -111,7 +60,7 @@ def process_single_file(file_name, input_split_path, output_split_path, int_max,
         segments = data['sem_class'].astype(np.int64) - 1
         raw_segments = data['sem_class'].astype(np.int64) 
 
-        min_x, min_y, g_size, g_model = get_ground_elevation(points, raw_segments)  
+        min_x, min_y = np.min(points[:, 0]), np.min(points[:, 1])
         tile_size = 50.0
         
         for x_s in np.arange(min_x, min_x + 500, tile_size):
@@ -127,16 +76,14 @@ def process_single_file(file_name, input_split_path, output_split_path, int_max,
                 _, idx = np.unique(g_c, axis=0, return_index=True)
                 c_p, c_i, c_s = c_p[idx], c_i[idx], c_s[idx]
                 
-                # Normalization
-                ix = ((c_p[:, 0] - min_x) / g_size).astype(int).clip(0, g_model.shape[0]-1)
-                iy = ((c_p[:, 1] - min_y) / g_size).astype(int).clip(0, g_model.shape[1]-1)
-                z_ref = g_model[ix, iy]
+                # Normalization: Local Block Minimum Z
+                z_ref = c_p[:, 2].min()
+                z_norm = (c_p[:, 2] - z_ref).clip(0, z_scale)
                 
-                hag = (c_p[:, 2] - z_ref).clip(0, z_scale)
                 norm_coords = np.zeros_like(c_p)
                 norm_coords[:, 0] = c_p[:, 0] - (x_s + 25.0)  # Centered meters
                 norm_coords[:, 1] = c_p[:, 1] - (y_s + 25.0)  # Centered meters
-                norm_coords[:, 2] = hag                       # Height in meters
+                norm_coords[:, 2] = z_norm                    # Local height in meters
                 
                 tile_folder = os.path.join(output_split_path, f"{file_name[:-4]}_{int(x_s)}_{int(y_s)}")
                 os.makedirs(tile_folder, exist_ok=True)
