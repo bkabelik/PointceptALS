@@ -1,9 +1,9 @@
 {
     "params": {
-        "sor_neighbors": 20,
-        "sor_std_ratio": 4.0,
-        "ror_radius": 5.375,
-        "ror_min_points": 9.0,
+        "sor_neighbors": 20.0,
+        "sor_std_ratio": 8.0,
+        "ror_radius": 2.0,
+        "ror_min_points": 2,
         "dbscan_eps": 0.7940000295639038,
         "dbscan_min_points": 2.0,
         "dbscan_base_alt": 27.0,
@@ -16,9 +16,9 @@
         "max_gui_points": 25000000
     },
     "active": {
-        "sor": false,
+        "sor": true,
         "ror": false,
-        "dbscan": true,
+        "dbscan": false,
         "floor": false,
         "intensity": false
     },

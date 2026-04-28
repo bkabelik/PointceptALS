@@ -518,14 +518,17 @@ class NoiseFilterApp:
             hbox = gui.Horiz(0.5 * em)
             hbox.add_child(gui.Label(f"{name}: "))
             
+            # Use the currently loaded param if it exists, otherwise use v_init
+            current_val = self.params.get(p_key, v_init)
+            
             is_double = isinstance(v_init, float)
             slider = gui.Slider(gui.Slider.DOUBLE if is_double else gui.Slider.INT)
             slider.set_limits(v_min, v_max)
-            slider.double_value = float(v_init)
+            slider.double_value = float(current_val)
             
             num_edit = gui.NumberEdit(gui.NumberEdit.DOUBLE if is_double else gui.NumberEdit.INT)
             num_edit.set_limits(v_min, v_max)
-            num_edit.double_value = float(v_init)
+            num_edit.double_value = float(current_val)
             
             # Use a closure to capture UI elements for synchronization
             def make_on_change(k, s, n):
