@@ -16,7 +16,7 @@
         "max_gui_points": 25000000
     },
     "active": {
-        "sor": true,
+        "sor": false,
         "ror": false,
         "dbscan": false,
         "floor": false,
