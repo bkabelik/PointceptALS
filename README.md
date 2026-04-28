@@ -14,6 +14,10 @@
 
 **Pointcept** is a powerful and flexible codebase for point cloud perception research. It is also an official implementation of the following paper:
 
+# Info: 
+This implementation is focusing on airborne laserscan. The trainig is done with the DALES objects dataset. Due to noise and ground is very important we implemented a noise filter gui and a ground processing. 
+
+
 # build:
 ```bash
 conda env create -f environment.yml --verbose
@@ -66,6 +70,10 @@ Class_7-Buildings Result: iou/accuracy 0.9725/0.9845
 python prediction.py --folder /home/fractal01/PointceptALS/data/demo --model_path /home/fractal01/PointceptALS/exp/dales/ptv3_run_03_nohag/model/model_best.pth --config_file /home/fractal01/PointceptALS/configs/dales/ptv3_dales.py --noise_filter interactive --show_predicted yes --intensity_scale 2000
 ```
 
+# compare two LAS files
+```bash
+python tools/compare_two_las.py 
+```
 
 # pointcept documentation
 
