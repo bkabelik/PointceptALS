@@ -27,24 +27,52 @@ CLASS_COLORS = {
 
 def get_class_colors(classes):
     colors = np.zeros((len(classes), 3))
-    # Map each class to its color, default to grey if unknown
     for k, v in CLASS_COLORS.items():
         colors[classes == k] = v
-    # Find unknown classes and set to grey
     known = np.isin(classes, list(CLASS_COLORS.keys()))
     colors[~known] = [0.7, 0.7, 0.7]
     return colors
+
+class ViewerWindow:
+    """A single viewer window with one SceneWidget."""
+    def __init__(self, title, x, y, width, height):
+        self.window = gui.Application.instance.create_window(
+            title, width, height)
+        
+        self.scene = gui.SceneWidget()
+        self.scene.scene = rendering.Open3DScene(self.window.renderer)
+        self.scene.scene.set_background([0.0, 0.0, 0.0, 1.0])
+        self.scene.set_view_controls(gui.SceneWidget.Controls.ROTATE_CAMERA)
+        self.window.add_child(self.scene)
+        self.window.set_on_layout(self._on_layout)
+        self.pcd = None
+        
+    def _on_layout(self, layout_context):
+        r = self.window.content_rect
+        self.scene.frame = gui.Rect(r.x, r.y, r.width, r.height)
+    
+    def set_geometry(self, pcd, mat, bbox):
+        self.pcd = pcd  # Persist reference
+        self.scene.scene.clear_geometry()
+        self.scene.scene.add_geometry("points", pcd, mat)
+        self.scene.setup_camera(60.0, bbox, bbox.get_center())
+        self.window.post_redraw()
+
 
 class CompareLasApp:
     def __init__(self):
         self.file1_path = ""
         self.file2_path = ""
+        self.pcds = []
+        self._bbox = None
         
-        self.window = gui.Application.instance.create_window("Compare Two LAS Files", 1600, 900)
+        # Main control window
+        self.window = gui.Application.instance.create_window(
+            "Compare Two LAS Files", 400, 700)
         
         em = self.window.theme.font_size
         
-        # Left Panel (Controls)
+        # Controls panel
         self.panel = gui.Vert(0.5 * em, gui.Margins(em, em, em, em))
         self.panel.add_child(gui.Label("Compare Two LAS Classifications"))
         
@@ -73,72 +101,123 @@ class CompareLasApp:
         
         self.panel.add_fixed(em)
         
+        # Reset views button
+        self.btn_reset = gui.Button("Reset All Views")
+        self.btn_reset.set_on_clicked(self._on_reset_views)
+        self.btn_reset.horizontal_padding_em = 1.0
+        self.btn_reset.vertical_padding_em = 0.3
+        self.panel.add_child(self.btn_reset)
+        
+        self.panel.add_fixed(em)
+        
         # Stats
-        self.stats_panel = gui.ScrollableVert(0.2 * em, gui.Margins(0.5 * em, 0.5 * em, 0.5 * em, 0.5 * em))
+        self.stats_panel = gui.ScrollableVert(
+            0.2 * em, gui.Margins(0.5 * em, 0.5 * em, 0.5 * em, 0.5 * em))
         self.label_stats = gui.Label("Statistics will appear here.\n")
         self.stats_panel.add_child(self.label_stats)
         self.panel.add_child(self.stats_panel)
         
-        # Right Panel (Viewers) - No container, added directly to window for manual layout
-        self.scenes = []
-        self.view_containers = []
-        for title in ["File 1", "File 2", "Difference"]:
-            v = gui.Vert()
-            title_label = gui.Label(title)
-            v.add_child(title_label)
-            
-            scene = gui.SceneWidget()
-            scene.scene = rendering.Open3DScene(self.window.renderer)
-            scene.scene.set_background([0.0, 0.0, 0.0, 1.0])
-            scene.background_color = gui.Color(0, 0, 0, 1)
-            scene.set_view_controls(gui.SceneWidget.Controls.ROTATE_MODEL)
-            v.add_child(scene)
-            
-            self.window.add_child(v)
-            self.scenes.append(scene)
-            self.view_containers.append(v)
-            
         self.window.add_child(self.panel)
+        self.window.set_on_layout(self._on_main_layout)
         
-        self.window.set_on_layout(self._on_layout)
+        # Create 3 separate viewer windows
+        vw = 500
+        vh = 600
+        self.viewers = [
+            ViewerWindow("File 1 - Classification", 410, 50, vw, vh),
+            ViewerWindow("File 2 - Classification", 420 + vw, 50, vw, vh),
+            ViewerWindow("Difference Map", 430 + 2 * vw, 50, vw, vh),
+        ]
         
-        # Synchronization logic
-        self.last_view_matrices = [None, None, None]
+        # Camera sync state
+        self._last_view_matrices = [None, None, None]
+        self._pending_sync_source = -1
+        self._sync_cooldown = 0
+        self._post_sync_ignore = 0
         self.window.set_on_tick_event(self._on_tick)
-
-    def _on_layout(self, layout_context):
+    
+    def _on_main_layout(self, layout_context):
         r = self.window.content_rect
-        em = self.window.theme.font_size
-        panel_width = 350
-        self.panel.frame = gui.Rect(r.x, r.y, panel_width, r.height)
+        self.panel.frame = gui.Rect(r.x, r.y, r.width, r.height)
+
+    def _on_tick(self):
+        """Debounced camera sync across the 3 viewer windows."""
+        if not self.pcds:
+            return True
         
-        view_x = r.x + panel_width
-        view_width = r.width - panel_width
+        # Post-sync cooldown: skip detection while look_at settles
+        if self._post_sync_ignore > 0:
+            self._post_sync_ignore -= 1
+            for i in range(3):
+                self._last_view_matrices[i] = np.array(
+                    self.viewers[i].scene.scene.camera.get_view_matrix())
+            return True
         
-        # Manually size the 3 viewers to be equal width
-        spacing = 0.2 * em
-        child_width = (view_width - 2 * spacing) / 3.0
+        # Detect which viewer's camera changed
+        changed_idx = -1
+        for i in range(3):
+            mat = np.array(
+                self.viewers[i].scene.scene.camera.get_view_matrix())
+            if self._last_view_matrices[i] is not None:
+                if not np.allclose(mat, self._last_view_matrices[i], atol=0.01):
+                    changed_idx = i
+            self._last_view_matrices[i] = mat
         
-        label_height = em * 1.5
-        for i, container in enumerate(self.view_containers):
-            # 1. Set the container frame
-            cont_x = view_x + i * (child_width + spacing)
-            container.frame = gui.Rect(cont_x, r.y, child_width, r.height)
-            
-            # 2. Layout children of the Vert container (Label and SceneWidget)
-            # Note: Child frames are relative to their parent container!
-            children = container.get_children()
-            if len(children) >= 2:
-                title_label = children[0]
-                scene_widget = children[1]
-                
-                # Title label at the top
-                title_label.frame = gui.Rect(0, 0, child_width, label_height)
-                # SceneWidget takes the rest of the height
-                scene_widget.frame = gui.Rect(0, label_height, child_width, r.height - label_height)
+        if changed_idx != -1:
+            # Camera is moving — keep resetting cooldown
+            self._pending_sync_source = changed_idx
+            self._sync_cooldown = 8
+        elif self._sync_cooldown > 0:
+            self._sync_cooldown -= 1
+            if self._sync_cooldown == 0 and self._pending_sync_source >= 0:
+                self._do_sync(self._pending_sync_source)
+                self._pending_sync_source = -1
+        
+        return True
+
+    def _do_sync(self, source_idx):
+        """Sync all viewer windows to match source_idx's camera."""
+        source = self.viewers[source_idx]
+        cam = source.scene.scene.camera
+        view_mat = np.array(cam.get_view_matrix(), dtype=np.float64)
+        R = view_mat[:3, :3]
+        t = view_mat[:3, 3]
+        
+        eye = (-R.T @ t).astype(np.float32)
+        up = (R[1, :3]).astype(np.float32)
+        center = np.array(source.scene.center_of_rotation, dtype=np.float32)
+        
+        # Validate
+        if (np.any(~np.isfinite(eye)) or np.any(~np.isfinite(center))
+                or np.any(~np.isfinite(up))):
+            return
+        up_len = np.linalg.norm(up)
+        if up_len < 1e-6:
+            return
+        up = up / up_len
+        
+        for i in range(3):
+            if i != source_idx:
+                self.viewers[i].scene.look_at(center, eye, up)
+                self.viewers[i].window.post_redraw()
+        
+        # Refresh stored matrices and pause detection
+        for i in range(3):
+            self._last_view_matrices[i] = np.array(
+                self.viewers[i].scene.scene.camera.get_view_matrix())
+        self._post_sync_ignore = 15
+
+    def _on_reset_views(self):
+        """Reset all viewers to the default camera position."""
+        if self._bbox is not None:
+            for viewer in self.viewers:
+                viewer.scene.setup_camera(
+                    60.0, self._bbox, self._bbox.get_center())
+                viewer.window.post_redraw()
 
     def _on_select_file(self, file_idx):
-        dlg = gui.FileDialog(gui.FileDialog.OPEN, f"Select File {file_idx}", self.window.theme)
+        dlg = gui.FileDialog(
+            gui.FileDialog.OPEN, f"Select File {file_idx}", self.window.theme)
         dlg.add_filter(".las .laz", "LAS files (.las, .laz)")
         dlg.add_filter("", "All files")
         
@@ -159,7 +238,6 @@ class CompareLasApp:
         if not self.file1_path or not self.file2_path:
             self.label_stats.text = "Error: Please select both files."
             return
-            
         if not os.path.exists(self.file1_path) or not os.path.exists(self.file2_path):
             self.label_stats.text = "Error: One or both files do not exist."
             return
@@ -182,25 +260,26 @@ class CompareLasApp:
             
             print(f"Comparing {len(pts1):,} points...")
             if len(pts1) != len(pts2):
-                print(f"Error: Point count mismatch ({len(pts1)} vs {len(pts2)})")
                 def update_err():
-                    self.label_stats.text = f"Error: Point counts differ!\nFile 1: {len(pts1):,}\nFile 2: {len(pts2):,}"
+                    self.label_stats.text = (
+                        f"Error: Point counts differ!\n"
+                        f"File 1: {len(pts1):,}\nFile 2: {len(pts2):,}")
                     self.btn_compare.enabled = True
-                gui.Application.instance.post_to_main_thread(self.window, update_err)
+                gui.Application.instance.post_to_main_thread(
+                    self.window, update_err)
                 return
             
-            # Stats calculation
+            # Stats
             matches = (cls1 == cls2)
             total_points = len(pts1)
-            num_matches = np.sum(matches)
+            num_matches = int(np.sum(matches))
             num_mismatches = total_points - num_matches
             accuracy = (num_matches / total_points) * 100.0
             
             stats_text = f"Total Points: {total_points:,}\n"
             stats_text += f"Matches: {num_matches:,} ({accuracy:.2f}%)\n"
-            stats_text += f"Mismatches: {num_mismatches:,} ({(100-accuracy):.2f}%)\n\n"
+            stats_text += f"Mismatches: {num_mismatches:,} ({100-accuracy:.2f}%)\n\n"
             
-            # Mismatch breakdown
             if num_mismatches > 0:
                 print(f"Calculating breakdown for {num_mismatches:,} mismatches...")
                 stats_text += "Mismatch Breakdown (File 1 -> File 2):\n"
@@ -208,14 +287,15 @@ class CompareLasApp:
                 cls1_miss = cls1[mismatch_mask]
                 cls2_miss = cls2[mismatch_mask]
                 
-                # Class name mapping
                 class_names = {
                     2: "Ground", 3: "Low Veg", 4: "Med Veg", 5: "High Veg",
                     6: "Building", 7: "Noise", 9: "Water", 14: "Wire",
                     15: "Tower", 19: "Overhead", 20: "Ignored"
                 }
                 
-                pairs, counts = np.unique(np.column_stack((cls1_miss, cls2_miss)), axis=0, return_counts=True)
+                pairs, counts = np.unique(
+                    np.column_stack((cls1_miss, cls2_miss)),
+                    axis=0, return_counts=True)
                 sort_idx = np.argsort(-counts)
                 pairs = pairs[sort_idx]
                 counts = counts[sort_idx]
@@ -226,29 +306,32 @@ class CompareLasApp:
                     stats_text += f"  {name1} -> {name2}: {count:,}\n"
 
             print("Centering and Preparing geometry...")
-            # Localize coordinates for rendering
             center = np.mean(pts1, axis=0)
             pts_local = (pts1 - center).astype(np.float64)
+            
+            # Clamp Z outliers
+            z_vals = pts_local[:, 2]
+            z_lo = np.percentile(z_vals, 0.5)
+            z_hi = np.percentile(z_vals, 99.5)
+            pts_local[:, 2] = np.clip(z_vals, z_lo, z_hi)
+            print(f"Z range after clamp: {z_lo:.1f} to {z_hi:.1f}")
             
             # Colors
             col1 = get_class_colors(cls1).astype(np.float64)
             col2 = get_class_colors(cls2).astype(np.float64)
-            
-            # Diff colors: Match = Grey, Mismatch = Red
             col_diff = np.full((total_points, 3), [0.2, 0.2, 0.2], dtype=np.float64)
             col_diff[~matches] = [1.0, 0.1, 0.1]
             
             print("Requesting UI Update...")
             def update_ui():
                 try:
-                    print("Updating UI and Scene...")
+                    print("Updating UI and Scenes...")
                     self.label_stats.text = stats_text
                     
                     mat = rendering.MaterialRecord()
                     mat.shader = "defaultUnlit"
-                    mat.point_size = 5.0
+                    mat.point_size = 3.0
                     
-                    # Create PointClouds on the main thread for safety
                     pcd1 = o3d.geometry.PointCloud()
                     pcd1.points = o3d.utility.Vector3dVector(pts_local)
                     pcd1.colors = o3d.utility.Vector3dVector(col1)
@@ -261,21 +344,22 @@ class CompareLasApp:
                     pcd3.points = o3d.utility.Vector3dVector(pts_local)
                     pcd3.colors = o3d.utility.Vector3dVector(col_diff)
                     
-                    self.pcds = [pcd1, pcd2, pcd3] # Persist references
+                    self.pcds = [pcd1, pcd2, pcd3]
                     
                     bbox = pcd1.get_axis_aligned_bounding_box()
+                    self._bbox = bbox
                     print(f"BBox: {bbox}")
-                    for i, (scene, pcd) in enumerate(zip(self.scenes, self.pcds)):
-                        scene.scene.clear_geometry()
-                        scene.scene.add_geometry(f"points_{i}", pcd, mat)
-                        scene.setup_camera(60.0, bbox, bbox.get_center())
-                        self.last_view_matrices[i] = scene.scene.camera.get_model_matrix()
-                        
-                    self.window.post_redraw()
-                    print("Update Complete.")
+                    
+                    # Push geometry to each viewer window
+                    for viewer, pcd in zip(self.viewers, self.pcds):
+                        viewer.set_geometry(pcd, mat, bbox)
+                    
+                    print("Update Complete. All 3 viewer windows are ready.")
                 except Exception as e:
                     print(f"Error in UI update: {e}")
-                    self.label_stats.text += f"\nError in UI update: {str(e)}"
+                    import traceback
+                    traceback.print_exc()
+                    self.label_stats.text += f"\nError: {str(e)}"
                 finally:
                     self.btn_compare.enabled = True
 
@@ -286,47 +370,9 @@ class CompareLasApp:
             import traceback
             traceback.print_exc()
             def update_err():
-                self.label_stats.text = f"Error processing files:\n{str(e)}"
+                self.label_stats.text = f"Error:\n{str(e)}"
                 self.btn_compare.enabled = True
             gui.Application.instance.post_to_main_thread(self.window, update_err)
-
-    def _on_tick(self):
-        # Synchronization check
-        changed_idx = -1
-        current_matrices = []
-        for i, scene in enumerate(self.scenes):
-            cam = scene.scene.camera
-            mat = cam.get_model_matrix()
-            current_matrices.append(mat)
-            if self.last_view_matrices[i] is not None:
-                if not np.allclose(mat, self.last_view_matrices[i], atol=1e-3):
-                    changed_idx = i
-                    
-        if changed_idx != -1:
-            # Sync others to changed_idx
-            source_cam = self.scenes[changed_idx].scene.camera
-            fov = source_cam.get_field_of_view()
-            fov_type = source_cam.get_field_of_view_type()
-            near = source_cam.get_near()
-            far = source_cam.get_far()
-            
-            for i, scene in enumerate(self.scenes):
-                if i != changed_idx:
-                    target_cam = scene.scene.camera
-                    target_cam.copy_from(source_cam)
-                    
-                    # Fix: Re-apply projection with the source's FOV to maintain zoom
-                    # and calculate aspect ratio for the target window
-                    frame = scene.frame
-                    aspect = float(frame.width) / float(max(1, frame.height))
-                    target_cam.set_projection(fov, aspect, near, far, fov_type)
-                    
-                    self.last_view_matrices[i] = target_cam.get_model_matrix()
-            
-            self.last_view_matrices[changed_idx] = current_matrices[changed_idx]
-            self.window.post_redraw()
-            
-        return True
 
 def main():
     gui.Application.instance.initialize()
