@@ -50,15 +50,15 @@ python tools/check_dtm.py /home/fractal01/PointceptALS/data/DALESObjects/train/5
 
 ```
 ```bash
-Val result: mIoU/mAcc/allAcc 0.8310/0.8851/0.9811.
-Class_0-Ground Result: iou/accuracy 0.9728/0.9908
-Class_1-Vegetation Result: iou/accuracy 0.9543/0.9716
-Class_2-Cars Result: iou/accuracy 0.8875/0.9625
-Class_3-Trucks Result: iou/accuracy 0.4764/0.5778
-Class_4-Power lines Result: iou/accuracy 0.9629/0.9773
-Class_5-Fences Result: iou/accuracy 0.6808/0.7763
-Class_6-Poles Result: iou/accuracy 0.7414/0.8395
-Class_7-Buildings Result: iou/accuracy 0.9721/0.9848
+Val result: mIoU/mAcc/allAcc 0.8354/0.8838/0.9814.
+Class_0-Ground Result: iou/accuracy 0.9731/0.9911
+Class_1-Vegetation Result: iou/accuracy 0.9549/0.9720
+Class_2-Cars Result: iou/accuracy 0.8886/0.9617
+Class_3-Trucks Result: iou/accuracy 0.4864/0.5567
+Class_4-Power lines Result: iou/accuracy 0.9648/0.9810
+Class_5-Fences Result: iou/accuracy 0.6884/0.7914
+Class_6-Poles Result: iou/accuracy 0.7547/0.8315
+Class_7-Buildings Result: iou/accuracy 0.9725/0.9845
 ```
 
 # prediction
