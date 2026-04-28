@@ -90,10 +90,15 @@ data = dict(
         type=dataset_type,
         split="test",
         data_root=data_root,
-        transform=[
-            dict(type="GridSample", grid_size=0.16, hash_type="fnv", mode="train", return_grid_coord=True),
-            dict(type="ToTensor"),
-            dict(type="Collect", keys=("coord", "grid_coord", "segment"), feat_keys=("coord", "strength")),
-        ],
+        test_mode=True,
+        test_cfg=dict(
+            voxelize=dict(type="GridSample", grid_size=0.16, hash_type="fnv", mode="test", keys=("coord", "strength"), return_grid_coord=True),
+            crop=None,
+            post_transform=[
+                dict(type="ToTensor"),
+                dict(type="Collect", keys=("coord", "grid_coord", "index"), feat_keys=("coord", "strength")),
+            ],
+            aug_transform=[[]],
+        )
     ),
 )

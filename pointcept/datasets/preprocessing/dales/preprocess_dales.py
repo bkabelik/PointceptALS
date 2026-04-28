@@ -71,10 +71,21 @@ def process_single_file(file_name, input_split_path, output_split_path, int_max,
                 
                 c_p, c_i, c_s = points[mask], intensity[mask], segments[mask]
                 
-                # Voxelize
+                # Voxelize (Centroid Averaging)
                 g_c = np.floor(c_p / voxel_size).astype(np.int64)
-                _, idx = np.unique(g_c, axis=0, return_index=True)
-                c_p, c_i, c_s = c_p[idx], c_i[idx], c_s[idx]
+                _, first_indices, inverse = np.unique(g_c, axis=0, return_index=True, return_inverse=True)
+                
+                counts = np.bincount(inverse)
+                c_p_avg = np.zeros((len(first_indices), 3), dtype=np.float32)
+                for i in range(3):
+                    c_p_avg[:, i] = np.bincount(inverse, weights=c_p[:, i]) / counts
+                
+                c_i_avg = (np.bincount(inverse, weights=c_i[:, 0]) / counts).reshape(-1, 1).astype(np.float32)
+                
+                # Keep the label of the first point in the voxel (fast and accurate for 15cm resolution)
+                c_s = c_s[first_indices]
+                c_p = c_p_avg
+                c_i = c_i_avg
                 
                 # Normalization: Local Block Minimum Z
                 z_ref = c_p[:, 2].min()
